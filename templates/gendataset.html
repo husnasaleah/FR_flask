@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% include 'head.html' %}
+    <title>Generate Dataset</title>
+</head>
+<body>
+    {% include 'navbar.html' %}
+
+    <div class="container mt-5">
+        <h2>Generate Dataset</h2>
+        <img src="{{ url_for('vidfeed_dataset', nbr=prs) }}" class="img-fluid" alt="Dataset Video Feed">
+    </div>
+
+</body>
+</html>
