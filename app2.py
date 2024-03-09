@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 import os
 import time
+import base64
 from datetime import date, datetime
 # import datetime
 from deepface import DeepFace
@@ -77,26 +78,16 @@ def generate_dataset(nbr):
     cv2.destroyAllWindows()
  
  
-def get_last_recognition_time():
-    mycursor.execute("SELECT accs_added FROM accs_hist ORDER BY accs_added DESC LIMIT 1")
-    row = mycursor.fetchone()
-    if row:
-        return row[0]
-    else:
-        return None  # หรือค่าเริ่มต้นที่คุณกำหนด
 
-# กำหนดค่าตั้งต้นสำหรับ last_recognition_time
-last_recognition_time = get_last_recognition_time() or datetime.datetime.now()
 
 # Initialize variables
 justscanned = False
 pause_cnt = 0
 cnt = 0
 
-# last_recognition_time = datetime.datetime.now()
 marked_persons = {}
 
-
+image_folder = "face_img/"
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< Face Recognition >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -104,14 +95,12 @@ def face_recognition():
     global justscanned
     global pause_cnt
     global cnt
-    global last_recognition_time
     global marked_persons
 
     def recognize(img):
         global justscanned
         global pause_cnt
         global cnt
-        global last_recognition_time
 
         gray_scale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray_scale, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
@@ -125,19 +114,20 @@ def face_recognition():
             if not justscanned:
                 # Crop the detected face
                 face = img[y:y + h, x:x + w]
+                face_gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+                cropped_image = cv2.resize(face, (200, 200))
+ 
                 # Perform face recognition and emotion analysis using DeepFace
-                result = DeepFace.find(face, db_path="dataset/", enforce_detection=False, model_name="VGG-Face")
+                result = DeepFace.find(img, db_path="dataset/", enforce_detection=False, model_name="VGG-Face")
+                objs = DeepFace.analyze(face, actions=['emotion'], enforce_detection=False)
+
+                cnt += 1
+                n = (100 / 30) * cnt
+                w_filled = (cnt / 30) * w
 
                 if len(result[0]['identity']) > 0:
-                    detected_identity = result[0]['identity'][0].split('/')[-1].split('.')[0]
-                    
-
-                    
-
-                    cnt += 1
-
-                    n = (100 / 30) * cnt
-                    w_filled = (cnt / 30) * w
+                    img_id = result[0]['identity'][0].split('/')[-1].split('.')[0]
+                    emotion = objs[0]['dominant_emotion']
 
                     if n < 100:
                         cv2.putText(img, str(int(n)) + ' %', (x + 20, y + h + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
@@ -146,31 +136,48 @@ def face_recognition():
                         cv2.rectangle(img, (x, y + h + 40), (x + int(w_filled), y + h + 50), (153, 255, 255), cv2.FILLED)
                         # Get person information from the database
                         try:
-                            mycursor.execute("select a.img_person, b.prs_name, b.prs_skill "
+                            mycursor.execute("select a.img_person, b.emp_name "
                                         "  from img_dataset a "
-                                        "  left join prs_mstr b on a.img_person = b.prs_nbr "
-                                        " where img_id = " + detected_identity)
+                                        "  left join employee b on a.img_person = b.emp_id "
+                                        " where img_id = " + img_id)
+                            
                             
                             row = mycursor.fetchone()
-                            pnbr = row[0]
-                            pname = row[1]
-                            pskill = row[2]
+                            emp_id = row[0]
+                            emp_name = row[1]
                         except Exception as e:
                             print("Error executing SQL query or fetching data:", e)
                
                         if int(cnt) == 29:
                             cnt = 0
-
-                            # Update the database with access history
-                            try:
-                                mycursor.execute("INSERT INTO accs_hist (accs_date, accs_prsn) VALUES (%s, %s)", (str(date.today()), str(pnbr)))
-                                mydb.commit()
-                            except Exception as e:
-                                mydb.rollback()  # Rollback changes in case of an error
-                                print("Error executing INSERT:", e)
-
-
-                            cv2.putText(img, pname + ' | ' + pskill, (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
+                            objs = DeepFace.analyze(face, actions=['gender','age'], enforce_detection=False)
+                            gender = objs[0]['dominant_gender']
+                            age = objs[0]['age']
+                            
+                        # ตรวจสอบและบันทึกรูปภาพลงในโฟลเดอร์
+                        if os.path.exists(image_folder):
+                            if cnt % 30 == 0:
+                                image_filename = f"{emp_id}_{time.time()}.jpg"
+                                image_path = os.path.join(image_folder, image_filename)
+                                cv2.imwrite(image_path, cropped_image)
+                                print(f"Image saved: {image_filename}")
+                                
+                                # เก็บที่อยู่ของไฟล์ในฐานข้อมูล
+                                try:
+                                    mycursor.execute("INSERT INTO detection (det_date,det_person,det_img_path, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s)",
+                                                    (str(date.today()), emp_id,image_filename, emotion, age, gender, ))
+                                    mydb.commit()
+                                    print("Image path saved in the database.")
+                                except Exception as e:
+                                    mydb.rollback()  # Rollback changes in case of an error
+                                    print("Error executing INSERT:", e)
+                        else:
+                            
+                            print("Image folder not found.")
+                            
+                        
+                            cv2.putText(img, emp_name + ' | '  + '|' + str(age)+"|"+gender, (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
+                            cv2.putText(img, emotion, (x, y + h + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
                             time.sleep(1)
 
                             justscanned = True
@@ -180,11 +187,44 @@ def face_recognition():
                         
                 
                 else:
-                    # คำตอบในกรณี unknown
-                    # if not justscanned:
+                    # Unknown person
+                    emp_id = 'unknown'
+                    res = DeepFace.analyze(face, actions=['emotion'], enforce_detection=False)
+                    emotion = res[0]['dominant_emotion']
+                    
+
+                    if n < 100:
+                        cv2.putText(img, str(int(n)) + ' %', (x + 20, y + h + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
+
+                        cv2.rectangle(img, (x, y + h + 40), (x + w, y + h + 50), (255, 255, 0), 2)
+                        cv2.rectangle(img, (x, y + h + 40), (x + int(w_filled), y + h + 50), (153, 255, 255), cv2.FILLED)
+                        if int(cnt) == 29:
+                                cnt = 0
+                                objs = DeepFace.analyze(face, actions=['gender','age'], enforce_detection=False)
+                                gender = objs[0]['dominant_gender']
+                                age = objs[0]['age']
+
+                        # Save image path in the database
+                        try:
+                            if cnt % 30 == 0:
+                                image_filename = f"{emp_id}_{time.time()}.jpg"
+                                image_path = os.path.join(image_folder, image_filename)
+                                cv2.imwrite(image_path, cropped_image)
+
+                                # กำหนดค่า emp_id ให้เป็น 'unknown' ถ้าไม่มีค่าหรือค่าเป็น -1
+                                if emp_id == 'unknown':
+                                    emp_id = -1
+
+                                mycursor.execute("INSERT INTO detection (det_date, det_person, det_img_path, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s)",
+                                                (str(date.today()), emp_id, image_filename, emotion, age, gender))
+                                mydb.commit()
+
+                                print("Image path saved in the database.")
+                        except Exception as e:
+                            mydb.rollback()  # Rollback changes in case of an error
+                            print("Error executing INSERT:", e)
+
                     cv2.putText(img, 'UNKNOWN', (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                    # else:
-                    #     cv2.putText(img, ' ', (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
 
                     if pause_cnt > 80:
                         justscanned = False
@@ -214,7 +254,14 @@ def face_recognition():
         if key == 27:
             break
 
- 
+def image_to_base64(image_path):
+    try:
+        with open(image_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+        return encoded_string
+    except FileNotFoundError:
+        return None
+
  
  
 @app.route('/')
@@ -263,11 +310,10 @@ def video_feed():
  
 @app.route('/fr_page')
 def fr_page():
-    """Video streaming home page."""
-    mycursor.execute("select a.accs_id, a.accs_prsn, b.prs_name, b.prs_skill, a.accs_added "
-                     "  from accs_hist a "
-                     "  left join prs_mstr b on a.accs_prsn = b.prs_nbr "
-                     " where a.accs_date = curdate() "
+    mycursor.execute("select a.det_id, a.det_person, b.emp_name, a.det_added "
+                     "  from detection a "
+                     "  left join employee b on a.det_person = b.emp_id "
+                     " where a.det_date = curdate() "
                      " order by 1 desc")
     data = mycursor.fetchall()
  
@@ -285,8 +331,8 @@ def countTodayScan():
     mycursor = mydb.cursor()
  
     mycursor.execute("select count(*) "
-                     "  from accs_hist "
-                     " where accs_date = curdate() ")
+                     "  from detection "
+                     " where det_date = curdate() ")
     row = mycursor.fetchone()
     rowcount = row[0]
  
@@ -294,24 +340,28 @@ def countTodayScan():
  
  
  
-@app.route('/loadData', methods = ['GET', 'POST'])
-def loadData():
-    mydb = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        passwd="",
-        database="flask_db"
-    )
-    mycursor = mydb.cursor()
- 
-    mycursor.execute("select a.accs_id, a.accs_prsn, b.prs_name, b.prs_skill, date_format(a.accs_added, '%H:%i:%s') "
-                     "  from accs_hist a "
-                     "  left join prs_mstr b on a.accs_prsn = b.prs_nbr "
-                     " where a.accs_date = curdate() "
-                     " order by 1 desc")
+@app.route('/loadData', methods=['GET', 'POST'])
+def load_data():
+    mycursor.execute("SELECT a.det_person, a.det_img_path, IFNULL(b.emp_name, 'unknown') AS emp_name, a.det_emo, a.det_age, a.det_gender "
+                     "FROM detection a "
+                     "LEFT JOIN employee b ON a.det_person = b.emp_id "
+                     "WHERE a.det_date = CURDATE() "
+                     "ORDER BY a.det_added DESC")
     data = mycursor.fetchall()
- 
-    return jsonify(response = data)
+
+    result = []
+    for row in data:
+        det_person, det_img_path, emp_name, det_emo, det_age, det_gender = row
+        if det_person is None or det_person == -1:
+            det_person = -1  
+        img_path = os.path.join('face_img', det_img_path)
+        img_base64 = image_to_base64(img_path)
+
+        if img_base64 is not None:
+            result.append((det_person, img_base64, emp_name, det_emo, det_age, det_gender))
+    return jsonify(response=result)
+
+
  
  
 if __name__ == "__main__":
