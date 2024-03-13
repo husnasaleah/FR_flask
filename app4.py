@@ -50,7 +50,9 @@ def camera_task():
                 cnt += 1
                 n = (100 / 30) * cnt
                 w_filled = (cnt / 30) * w
-                result, objs, gender, age = deepface_task(face)
+                result, objs, gender, age = deepface_task(face, results, lock)
+                # deepface_task(face_img, results, lock)
+
                 if len(result[0]['identity']) > 0:
                     img_id = result[0]['identity'][0].split('/')[-1].split('.')[0]
                     emotion = objs[0]['dominant_emotion']
@@ -123,15 +125,40 @@ def camera_task():
             break
 
     
-
+# def process_image(face_img, results, lock):
+#     deepface_task(face_img, results, lock)
 # ฟังก์ชันสำหรับการทำงานของ DeepFace
-def deepface_task(face_img):
+def deepface_task(face_img, results, lock):
     result = DeepFace.find(face_img, db_path="dataset/", enforce_detection=False, model_name="VGG-Face")
     objs = DeepFace.analyze(face_img, actions=['emotion'], enforce_detection=False)
     gender = DeepFace.analyze(face_img, actions=['gender'], enforce_detection=False)
     age = DeepFace.analyze(face_img, actions=['age'], enforce_detection=False)
 
-    return result, objs, gender, age
+    # สำหรับการเขียนผลลัพธ์ลงในตัวแปรร่วมใช้งาน
+    with lock:
+        results.append((result, objs, gender, age))
+
+def main():
+    # สร้างรายการของภาพหน้าตาที่ต้องการประมวลผล
+    face_images = [...]
+
+    results = []  # รายการเก็บผลลัพธ์
+    lock = threading.Lock()  # เพื่อป้องกันการเข้าถึงข้อมูลร่วมใช้งาน
+
+    threads = []
+    for face_img in face_images:
+        thread = threading.Thread(target=deepface_task, args=(face_img, results, lock))
+        thread.start()
+        threads.append(thread)
+
+    # รอให้ทุก thread ทำงานเสร็จสมบูรณ์
+    for thread in threads:
+        thread.join()
+
+    # ประมวลผลผลลัพธ์ที่ได้รับ
+    for result in results:
+        # ทำอะไรกับผลลัพธ์ต่อไปนี้
+        pass
 
 
 @app.route('/')
@@ -178,11 +205,7 @@ def load_data():
 
 
 if __name__ == "__main__":
-    camera_thread = threading.Thread(target=camera_task)
-    deepface_thread = threading.Thread(target=deepface_task)
-
-    camera_thread.start()
-    deepface_thread.start()
+    main()
 
     app.run(host='127.0.0.1', port=5001, debug=True)
 
