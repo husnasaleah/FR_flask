@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% include 'head.html' %}
+    <title>Face Recognition Home</title>
+</head>
+<body>
+    {% include 'navbar.html' %}
+
+    <div class="container mt-5">
+        <h2>Face Recognition Home</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Person Number</th>
+                    <th>Person Name</th>
+                    <th>Person Skill</th>
+                    <th>Active</th>
+                    <th>Added Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in data %}
+                    <tr>
+                        <td>{{ row[0] }}</td>
+                        <td>{{ row[1] }}</td>
+                        <td>{{ row[2] }}</td>
+                        <td>{{ row[3] }}</td>
+                        <td>{{ row[4] }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</body>
+</html>

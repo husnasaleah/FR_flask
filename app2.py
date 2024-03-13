@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, session, redirect, url_for, Response, jsonify
+from flask import Flask, render_template, request, session, redirect, url_for, Response, jsonify, send_file
 import mysql.connector
+import io
 import cv2
 from PIL import Image
 import numpy as np
@@ -87,7 +88,6 @@ cnt = 0
 
 marked_persons = {}
 
-image_folder = "face_img/"
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< Face Recognition >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -154,28 +154,23 @@ def face_recognition():
                             gender = objs[0]['dominant_gender']
                             age = objs[0]['age']
                             
-                        # ตรวจสอบและบันทึกรูปภาพลงในโฟลเดอร์
-                        if os.path.exists(image_folder):
-                            if cnt % 30 == 0:
-                                image_filename = f"{emp_id}_{time.time()}.jpg"
-                                image_path = os.path.join(image_folder, image_filename)
-                                cv2.imwrite(image_path, cropped_image)
-                                print(f"Image saved: {image_filename}")
+                            # Convert the image to a binary format
+                            _, imgS_encoded = cv2.imencode('.jpg', cropped_image)
+                            imgS_blob = imgS_encoded.tobytes()
+
+                            _, imgL_encoded = cv2.imencode('.jpg', img)
+                            imgL_blob = imgL_encoded.tobytes()
                                 
-                                # เก็บที่อยู่ของไฟล์ในฐานข้อมูล
-                                try:
-                                    mycursor.execute("INSERT INTO detection (det_date,det_person,det_img_path, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s)",
-                                                    (str(date.today()), emp_id,image_filename, emotion, age, gender, ))
-                                    mydb.commit()
-                                    print("Image path saved in the database.")
-                                except Exception as e:
-                                    mydb.rollback()  # Rollback changes in case of an error
-                                    print("Error executing INSERT:", e)
-                        else:
-                            
-                            print("Image folder not found.")
-                            
-                        
+                            # เก็บที่อยู่ของไฟล์ในฐานข้อมูล
+                            try:
+                                mycursor.execute("INSERT INTO detection (det_date,det_person,det_img_face,det_img_env, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                                (str(date.today()), emp_id,imgS_blob,imgL_blob, emotion, age, gender, ))
+                                mydb.commit()
+                                print("Image path saved in the database.")
+                            except Exception as e:
+                                mydb.rollback()  # Rollback changes in case of an error
+                                print("Error executing INSERT:", e)
+
                             cv2.putText(img, emp_name + ' | '  + '|' + str(age)+"|"+gender, (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
                             cv2.putText(img, emotion, (x, y + h + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (153, 255, 255), 2, cv2.LINE_AA)
                             time.sleep(1)
@@ -207,16 +202,18 @@ def face_recognition():
                         # Save image path in the database
                         try:
                             if cnt % 30 == 0:
-                                image_filename = f"{emp_id}_{time.time()}.jpg"
-                                image_path = os.path.join(image_folder, image_filename)
-                                cv2.imwrite(image_path, cropped_image)
+                                _, imgS_encoded = cv2.imencode('.jpg', cropped_image)
+                                imgS_blob = imgS_encoded.tobytes()
+
+                                _, imgL_encoded = cv2.imencode('.jpg', img)
+                                imgL_blob = imgL_encoded.tobytes()
 
                                 # กำหนดค่า emp_id ให้เป็น 'unknown' ถ้าไม่มีค่าหรือค่าเป็น -1
                                 if emp_id == 'unknown':
                                     emp_id = -1
 
-                                mycursor.execute("INSERT INTO detection (det_date, det_person, det_img_path, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s)",
-                                                (str(date.today()), emp_id, image_filename, emotion, age, gender))
+                                mycursor.execute("INSERT INTO detection (det_date, det_person, det_img_face,det_img_env, det_emo, det_age, det_gender) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                                (str(date.today()), emp_id, imgS_blob,imgL_blob, emotion, age, gender))
                                 mydb.commit()
 
                                 print("Image path saved in the database.")
@@ -254,13 +251,13 @@ def face_recognition():
         if key == 27:
             break
 
-def image_to_base64(image_path):
-    try:
-        with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-        return encoded_string
-    except FileNotFoundError:
-        return None
+# def image_to_base64(image_path):
+#     try:
+#         with open(image_path, "rb") as image_file:
+#             encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+#         return encoded_string
+#     except FileNotFoundError:
+#         return None
 
  
  
@@ -340,9 +337,10 @@ def countTodayScan():
  
  
  
+
 @app.route('/loadData', methods=['GET', 'POST'])
 def load_data():
-    mycursor.execute("SELECT a.det_person, a.det_img_path, IFNULL(b.emp_name, 'unknown') AS emp_name, a.det_emo, a.det_age, a.det_gender "
+    mycursor.execute("SELECT a.det_person, a.det_img_face, IFNULL(b.emp_name, 'unknown') AS emp_name, a.det_emo, a.det_age, a.det_gender "
                      "FROM detection a "
                      "LEFT JOIN employee b ON a.det_person = b.emp_id "
                      "WHERE a.det_date = CURDATE() "
@@ -351,15 +349,20 @@ def load_data():
 
     result = []
     for row in data:
-        det_person, det_img_path, emp_name, det_emo, det_age, det_gender = row
-        if det_person is None or det_person == -1:
-            det_person = -1  
-        img_path = os.path.join('face_img', det_img_path)
-        img_base64 = image_to_base64(img_path)
+        det_person, det_img_face, emp_name, det_emo, det_age, det_gender = row
 
-        if img_base64 is not None:
-            result.append((det_person, img_base64, emp_name, det_emo, det_age, det_gender))
+        # Convert the binary image data to base64
+        img_base64 = base64.b64encode(det_img_face).decode('utf-8')
+
+        result.append((det_person, img_base64, emp_name, det_emo, det_age, det_gender))
+
     return jsonify(response=result)
+
+# @app.route('/loadImage/<det_id>')
+# def load_image(det_id):
+#     mycursor.execute("SELECT det_img_env FROM detection WHERE det_id = %s", (det_id,))
+#     img_data = mycursor.fetchone()[0]
+#     return Response(img_data, mimetype='image/jpeg')
 
 
  
